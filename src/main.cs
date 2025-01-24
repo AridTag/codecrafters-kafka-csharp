@@ -3,11 +3,11 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 
-var server = new TcpListener(IPAddress.Any, 9092);
+using var server = new TcpListener(IPAddress.Any, 9092);
 server.Start();
 
 var receiveBuffer = new byte[1024];
-var newClient = await server.AcceptTcpClientAsync().ConfigureAwait(false);
+using var newClient = await server.AcceptTcpClientAsync().ConfigureAwait(false);
 var networkStream = newClient.GetStream();
 
 while (newClient.Connected)
@@ -40,7 +40,7 @@ while (newClient.Connected)
 
     var request = ReadRequest(receiveBuffer.AsSpan(0, messageSize));
     
-    SendResponse(networkStream, request);
+    await SendResponse(networkStream, request).ConfigureAwait(false);
 }
 
 return;
@@ -62,41 +62,84 @@ static Request ReadRequest(ReadOnlySpan<byte> buffer)
     };
 }
 
-static void SendResponse(NetworkStream stream, Request request)
+static async Task SendResponse(NetworkStream stream, Request request)
 {
-    var response = new PacketBuilder(stackalloc byte[8])
-        .Write(request.CorrelationId)
-        .Build();
+    PacketData response;
+    if (request.ApiVersion is < 0 or > 4)
+    {
+        response = new PacketBuilder()
+            .Write(request.CorrelationId)
+            .Write((short)35) // Invalid version
+            .Build();
+    }
+    else
+    {
+        response = new PacketBuilder()
+            .Write(request.CorrelationId)
+            .Write((short)0)
+            .Build();
+    }
 
-    stream.Write(response);
-    stream.Flush();
+    await stream.WriteAsync(response.Buffer.AsMemory(0, response.Size)).ConfigureAwait(false);
+    await stream.FlushAsync().ConfigureAwait(false);
 }
 
-public ref struct PacketBuilder(Span<byte> initialBuffer)
+public struct PacketData : IDisposable
 {
-    private Span<byte> _Buffer = initialBuffer;
+    public byte[] Buffer;
+    public int Size;
+    
+    public void Dispose()
+    {
+        ArrayPool<byte>.Shared.Return(Buffer);
+        Buffer = null!;
+        Size = 0;
+    }
+}
+
+public ref struct PacketBuilder()
+{
+    private byte[] _Buffer = ArrayPool<byte>.Shared.Rent(1024);
     private int _Offset = 4; // Start with 4 bytes for the size
+
+    private void EnsureCapacity(int size)
+    {
+        if (_Offset + size <= _Buffer.Length) return;
+        
+        var newBuffer = ArrayPool<byte>.Shared.Rent(_Buffer.Length * 2);
+        _Buffer.CopyTo(newBuffer.AsSpan());
+        _Buffer = newBuffer;
+    }
 
     public PacketBuilder Write(int value)
     {
-        if (_Offset + sizeof(int) > _Buffer.Length)
-        {
-            var newBuffer = ArrayPool<byte>.Shared.Rent(_Buffer.Length * 2);
-            _Buffer.CopyTo(newBuffer);
-            _Buffer = newBuffer;
-        }
+        EnsureCapacity(sizeof(int));
         
-        BinaryPrimitives.WriteInt32BigEndian(_Buffer[_Offset..], value);
+        BinaryPrimitives.WriteInt32BigEndian(_Buffer.AsSpan(_Offset), value);
 
         _Offset += sizeof(int);
         return this;
     }
 
-    public Span<byte> Build()
+    public PacketBuilder Write(short value)
     {
-        BinaryPrimitives.WriteInt32BigEndian(_Buffer[..4], _Offset);
+        EnsureCapacity(sizeof(short));
         
-        return _Buffer.Slice(0, _Offset);
+        BinaryPrimitives.WriteInt16BigEndian(_Buffer.AsSpan(_Offset), value);
+
+        _Offset += sizeof(short);
+        return this;
+    }
+
+    public PacketData Build()
+    {
+        BinaryPrimitives.WriteInt32BigEndian(_Buffer.AsSpan(), _Offset);
+        
+        return new ()
+        {
+            Buffer = _Buffer,
+            Size = _Offset,
+        };
     }
 }
 

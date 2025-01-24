@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 
 var server = new TcpListener(IPAddress.Any, 9092);
 server.Start();
@@ -39,13 +38,34 @@ while (newClient.Connected)
         break;
     }
 
-    SendResponse(networkStream, 7);
+    var request = ReadRequest(receiveBuffer.AsSpan(0, messageSize));
+    
+    SendResponse(networkStream, request);
 }
 
-static void SendResponse(NetworkStream stream, int correlationId)
+return;
+
+static Request ReadRequest(ReadOnlySpan<byte> buffer)
+{
+    var requestApiKey = BinaryPrimitives.ReadInt16BigEndian(buffer);
+    buffer = buffer[2..];
+    var requestApiVersion = BinaryPrimitives.ReadInt16BigEndian(buffer);
+    buffer = buffer[2..];
+    var requestCorrelationId = BinaryPrimitives.ReadInt32BigEndian(buffer);
+
+    return new()
+    {
+        ApiKey = requestApiKey,
+        ApiVersion = requestApiVersion,
+        CorrelationId = requestCorrelationId,
+        ClientId = string.Empty
+    };
+}
+
+static void SendResponse(NetworkStream stream, Request request)
 {
     var response = new PacketBuilder(stackalloc byte[8])
-        .Write(correlationId)
+        .Write(request.CorrelationId)
         .Build();
 
     stream.Write(response);
@@ -78,4 +98,12 @@ public ref struct PacketBuilder(Span<byte> initialBuffer)
         
         return _Buffer.Slice(0, _Offset);
     }
+}
+
+struct Request
+{
+    public short ApiKey;
+    public short ApiVersion;
+    public int CorrelationId;
+    public string ClientId;
 }

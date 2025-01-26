@@ -21,17 +21,19 @@ public sealed class ApiVersionsEndPoint : IApiEndPoint
     
     public PacketData HandleRequest(KafkaRequest request)
     {
-        var builder = new PacketBuilder()
-            .WriteInt32BigEndian(request.Header.CorrelationId);
-    
-        if (request.Header.ApiVersion < MinimumVersion || request.Header.ApiVersion > MaximumVersion)
-        {
-            return builder
-                .WriteInt16BigEndian(35) // Invalid version
-                .Build();
-        }
+        var builder = new PacketBuilder();
+        builder.WriteInt32BigEndian(request.Header.CorrelationId);
 
-        builder.WriteInt16BigEndian(0); // No error
+        short errorCode;
+        if (request.Header.ApiVersion < MinimumVersion || request.Header.ApiVersion > MaximumVersion)
+            errorCode = 35;
+        else
+            errorCode = 0;
+
+        builder.WriteInt16BigEndian(errorCode);
+        if (errorCode != 0)
+            return builder.Build();
+        
         builder.WriteVariableUInt32((uint)_EndPoints.Value.Count() + 1); // Num end points
         foreach (var endPoint in _EndPoints.Value.OrderBy(e => e.ApiKey))
         {
@@ -43,6 +45,7 @@ public sealed class ApiVersionsEndPoint : IApiEndPoint
 
         builder.WriteInt32BigEndian(0); // Throttle time
         builder.WriteByte(0); // Num tagged fields
+
         return builder.Build();
     }
 }

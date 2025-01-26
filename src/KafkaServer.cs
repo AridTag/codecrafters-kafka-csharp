@@ -95,10 +95,10 @@ internal sealed class KafkaServer
         }
         else
         {
-            response = new PacketBuilder()
-                .WriteInt32BigEndian(e.Request.Header.CorrelationId)
-                .WriteInt16BigEndian((short)3) // Unknown topic or partition
-                .Build();
+            var builder = new PacketBuilder();
+            builder.WriteInt32BigEndian(e.Request.Header.CorrelationId);
+            builder.WriteInt16BigEndian(3); // Unknown topic or partition
+            response = builder.Build();
         }
     
         try

@@ -34,35 +34,32 @@ public ref struct PacketBuilder()
         ArrayPool<byte>.Shared.Return(oldBuffer);
     }
 
-    public PacketBuilder WriteInt32BigEndian(int value)
+    public void WriteInt32BigEndian(int value)
     {
         EnsureCapacity(sizeof(int));
         
         BinaryPrimitives.WriteInt32BigEndian(_Buffer.AsSpan(_Offset), value);
 
         _Offset += sizeof(int);
-        return this;
     }
 
-    public PacketBuilder WriteInt16BigEndian(short value)
+    public void WriteInt16BigEndian(short value)
     {
         EnsureCapacity(sizeof(short));
         
         BinaryPrimitives.WriteInt16BigEndian(_Buffer.AsSpan(_Offset), value);
 
         _Offset += sizeof(short);
-        return this;
     }
 
-    public PacketBuilder WriteByte(byte value)
+    public void WriteByte(byte value)
     {
         EnsureCapacity(1);
         _Buffer[_Offset] = value;
         _Offset += 1;
-        return this;
     }
     
-    public PacketBuilder WriteVariableUInt32(uint value)
+    public void WriteVariableUInt32(uint value)
     {
         while (value > 0)
         {
@@ -73,7 +70,6 @@ public ref struct PacketBuilder()
             
             WriteByte(b);
         }
-        return this;
     }
 
     public PacketData Build()

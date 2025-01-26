@@ -1,152 +1,50 @@
-using System.Buffers;
-using System.Buffers.Binary;
-using System.Net;
-using System.Net.Sockets;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using kafka.EndPoints;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
-using var server = new TcpListener(IPAddress.Any, 9092);
-server.Start();
+namespace kafka;
 
-var receiveBuffer = new byte[1024];
-using var newClient = await server.AcceptTcpClientAsync().ConfigureAwait(false);
-var networkStream = newClient.GetStream();
-
-while (newClient.Connected)
+internal class Program
 {
-    try
+    public static async Task Main(string[] args)
     {
-        await networkStream.ReadExactlyAsync(receiveBuffer, 0, 4).ConfigureAwait(false);
-    }
-    catch (EndOfStreamException)
-    {
-        Console.WriteLine("Client disconnected while waiting for message size");
-        break;
-    }
-
-    var messageSize = BinaryPrimitives.ReadInt32BigEndian(receiveBuffer.AsSpan(0, 4));
-    if (messageSize > receiveBuffer.Length)
-    {
-        receiveBuffer = new byte[messageSize];
+        var builder = Host.CreateApplicationBuilder(args);
+        builder.Services.AddHostedService<KafkaServerHost>();
+        builder.Services.AddTransient(typeof(Lazy<>), typeof(LazilyResolved<>));
+        builder.Services.AddSingleton<IApiEndPoint, ApiVersionsEndPoint>();
+        await builder.Build().RunAsync();
     }
 
-    try
+    private sealed class LazilyResolved<T> : Lazy<T> where T : notnull
     {
-        await networkStream.ReadExactlyAsync(receiveBuffer, 0, messageSize).ConfigureAwait(false);
-    }
-    catch (EndOfStreamException)
-    {
-        Console.WriteLine("Client disconnected while waiting for message");
-        break;
-    }
-
-    var request = ReadRequest(receiveBuffer.AsSpan(0, messageSize));
-    
-    await SendResponse(networkStream, request).ConfigureAwait(false);
-}
-
-return;
-
-static Request ReadRequest(ReadOnlySpan<byte> buffer)
-{
-    var requestApiKey = BinaryPrimitives.ReadInt16BigEndian(buffer);
-    buffer = buffer[2..];
-    var requestApiVersion = BinaryPrimitives.ReadInt16BigEndian(buffer);
-    buffer = buffer[2..];
-    var requestCorrelationId = BinaryPrimitives.ReadInt32BigEndian(buffer);
-
-    return new()
-    {
-        ApiKey = requestApiKey,
-        ApiVersion = requestApiVersion,
-        CorrelationId = requestCorrelationId,
-        ClientId = string.Empty
-    };
-}
-
-static async Task SendResponse(NetworkStream stream, Request request)
-{
-    PacketData response;
-    if (request.ApiVersion is < 0 or > 4)
-    {
-        response = new PacketBuilder()
-            .Write(request.CorrelationId)
-            .Write((short)35) // Invalid version
-            .Build();
-    }
-    else
-    {
-        response = new PacketBuilder()
-            .Write(request.CorrelationId)
-            .Write((short)0)
-            .Build();
-    }
-
-    await stream.WriteAsync(response.Buffer.AsMemory(0, response.Size)).ConfigureAwait(false);
-    await stream.FlushAsync().ConfigureAwait(false);
-}
-
-public struct PacketData : IDisposable
-{
-    public byte[] Buffer;
-    public int Size;
-    
-    public void Dispose()
-    {
-        ArrayPool<byte>.Shared.Return(Buffer);
-        Buffer = null!;
-        Size = 0;
-    }
-}
-
-public ref struct PacketBuilder()
-{
-    private byte[] _Buffer = ArrayPool<byte>.Shared.Rent(1024);
-    private int _Offset = 4; // Start with 4 bytes for the size
-
-    private void EnsureCapacity(int size)
-    {
-        if (_Offset + size <= _Buffer.Length) return;
-        
-        var newBuffer = ArrayPool<byte>.Shared.Rent(_Buffer.Length * 2);
-        _Buffer.CopyTo(newBuffer.AsSpan());
-        _Buffer = newBuffer;
-    }
-
-    public PacketBuilder Write(int value)
-    {
-        EnsureCapacity(sizeof(int));
-        
-        BinaryPrimitives.WriteInt32BigEndian(_Buffer.AsSpan(_Offset), value);
-
-        _Offset += sizeof(int);
-        return this;
-    }
-
-    public PacketBuilder Write(short value)
-    {
-        EnsureCapacity(sizeof(short));
-        
-        BinaryPrimitives.WriteInt16BigEndian(_Buffer.AsSpan(_Offset), value);
-
-        _Offset += sizeof(short);
-        return this;
-    }
-
-    public PacketData Build()
-    {
-        BinaryPrimitives.WriteInt32BigEndian(_Buffer.AsSpan(), _Offset);
-        
-        return new ()
+        public LazilyResolved(IServiceProvider serviceProvider)
+            : base(serviceProvider.GetRequiredService<T>)
         {
-            Buffer = _Buffer,
-            Size = _Offset,
-        };
+        }
     }
 }
 
-struct Request
+internal sealed class KafkaServerHost : IHostedService
 {
-    public short ApiKey;
-    public short ApiVersion;
-    public int CorrelationId;
-    public string ClientId;
+    private readonly KafkaServer _Server;
+    
+    public KafkaServerHost(IEnumerable<IApiEndPoint> endPoints)
+    {
+        _Server = new KafkaServer(endPoints);
+    }
+    
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _Server.Start();
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        return _Server.StopAsync();
+    }
 }

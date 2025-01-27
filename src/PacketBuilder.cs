@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 
 namespace kafka;
 
@@ -21,18 +24,6 @@ public ref struct PacketBuilder()
 {
     private byte[] _Buffer = ArrayPool<byte>.Shared.Rent(256);
     private int _Offset = 4; // Start with 4 bytes for the size
-
-    private void EnsureCapacity(int size)
-    {
-        if (_Offset + size <= _Buffer.Length)
-            return;
-        
-        var oldBuffer = _Buffer;
-        _Buffer = ArrayPool<byte>.Shared.Rent(_Buffer.Length * 2);
-        oldBuffer.CopyTo(_Buffer.AsSpan());
-        
-        ArrayPool<byte>.Shared.Return(oldBuffer);
-    }
 
     public void WriteInt32BigEndian(int value)
     {
@@ -72,6 +63,18 @@ public ref struct PacketBuilder()
         }
     }
 
+    public delegate void WriteArrayElementDelegate<in T>(ref PacketBuilder builder, T value);
+    
+    [SuppressMessage("ReSharper", "PossibleMultipleEnumeration", Justification = "Overload resolution should prefer more optimized overloads where available")]
+    public void WriteCompactArray<T>(IEnumerable<T> values, WriteArrayElementDelegate<T> writeElementDelegate)
+    {
+        var elementCount = (uint)(values.Count() + 1);
+        WriteVariableUInt32(elementCount);
+        
+        foreach (var value in values)
+            writeElementDelegate(ref this, value);
+    }
+
     public PacketData Build()
     {
         var messageSize = _Offset - 4;
@@ -82,5 +85,17 @@ public ref struct PacketBuilder()
             Buffer = _Buffer,
             Size = _Offset,
         };
+    }
+    
+    private void EnsureCapacity(int size)
+    {
+        if (_Offset + size <= _Buffer.Length)
+            return;
+        
+        var oldBuffer = _Buffer;
+        _Buffer = ArrayPool<byte>.Shared.Rent(_Buffer.Length * 2);
+        oldBuffer.CopyTo(_Buffer.AsSpan());
+        
+        ArrayPool<byte>.Shared.Return(oldBuffer);
     }
 }

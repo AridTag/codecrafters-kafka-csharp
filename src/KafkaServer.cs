@@ -83,14 +83,24 @@ internal sealed class KafkaServer
         PacketData response;
         if (_EndPoints.TryGetValue(e.Request.Header.ApiKey, out var endPoint))
         {
-            try
+            if (e.Request.Header.ApiVersion < endPoint.MinimumVersion || e.Request.Header.ApiVersion > endPoint.MaximumVersion)
             {
-                response = endPoint.HandleRequest(e.Request);
+                var builder = new PacketBuilder();
+                builder.WriteInt32BigEndian(e.Request.Header.CorrelationId);
+                builder.WriteInt16BigEndian(35); // Unsupported version
+                response = builder.Build();
             }
-            catch
+            else
             {
-                // TODO: Do something
-                throw;
+                try
+                {
+                    response = endPoint.HandleRequest(e.Request);
+                }
+                catch
+                {
+                    // TODO: Do something
+                    throw;
+                }
             }
         }
         else

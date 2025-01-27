@@ -23,25 +23,18 @@ public sealed class ApiVersionsEndPoint : IApiEndPoint
     {
         var builder = new PacketBuilder();
         builder.WriteInt32BigEndian(request.Header.CorrelationId);
+        builder.WriteInt16BigEndian(0); // Error code. 0 = no error
 
-        short errorCode;
-        if (request.Header.ApiVersion < MinimumVersion || request.Header.ApiVersion > MaximumVersion)
-            errorCode = 35;
-        else
-            errorCode = 0;
-
-        builder.WriteInt16BigEndian(errorCode);
-        if (errorCode != 0)
-            return builder.Build();
-        
-        builder.WriteVariableUInt32((uint)_EndPoints.Value.Count() + 1); // Num end points
-        foreach (var endPoint in _EndPoints.Value.OrderBy(e => e.ApiKey))
-        {
-            builder.WriteInt16BigEndian(endPoint.ApiKey);
-            builder.WriteInt16BigEndian(endPoint.MinimumVersion);
-            builder.WriteInt16BigEndian(endPoint.MaximumVersion);
-            builder.WriteByte(0); // No tagged fields
-        }
+        builder.WriteCompactArray(
+            _EndPoints.Value.OrderBy(e => e.ApiKey),
+            static (ref PacketBuilder builder, IApiEndPoint endPoint) =>
+            {
+                builder.WriteInt16BigEndian(endPoint.ApiKey);
+                builder.WriteInt16BigEndian(endPoint.MinimumVersion);
+                builder.WriteInt16BigEndian(endPoint.MaximumVersion);
+                builder.WriteByte(0); // No tagged fields
+            }
+        );
 
         builder.WriteInt32BigEndian(0); // Throttle time
         builder.WriteByte(0); // Num tagged fields

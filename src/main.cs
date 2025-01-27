@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using kafka.EndPoints;
@@ -15,7 +16,12 @@ internal class Program
         var builder = Host.CreateApplicationBuilder(args);
         builder.Services.AddHostedService<KafkaServerHost>();
         builder.Services.AddTransient(typeof(Lazy<>), typeof(LazilyResolved<>));
-        builder.Services.AddSingleton<IApiEndPoint, ApiVersionsEndPoint>();
+        {
+            var endpoints = typeof(IApiEndPoint).Assembly.GetTypes()
+                .Where(t => typeof(IApiEndPoint).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
+            foreach (var endpoint in endpoints)
+                builder.Services.AddSingleton(typeof(IApiEndPoint), endpoint);
+        }
         await builder.Build().RunAsync();
     }
 
